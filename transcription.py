@@ -44,10 +44,9 @@ def upload_to_s3(file_path: str) -> str:
     return public_url
 
 
-async def transcribe_audio_async(file_path: str) -> str:
+async def transcribe_audio_async(file_path: str) -> dict:
     """
-    Асинхронная транскрибация через Yandex SpeechKit v2.
-    Сначала загружает файл в Object Storage, потом отправляет ссылку.
+    Асинхронная транскрибация. Возвращает чанки с таймкодами.
     """
     if not os.path.exists(file_path):
         raise Exception(f"Файл не найден: {file_path}")
@@ -56,7 +55,7 @@ async def transcribe_audio_async(file_path: str) -> str:
     print(f"📁 Файл: {file_path}")
     print(f"📏 Размер: {file_size / 1024 / 1024:.2f} МБ")
 
-    # 1. Загружаем файл в Object Storage (синхронно, но быстро)
+    # 1. Загружаем файл в Object Storage
     file_url = upload_to_s3(file_path)
 
     # 2. Отправляем ссылку в SpeechKit
@@ -88,7 +87,7 @@ async def transcribe_audio_async(file_path: str) -> str:
                     "x-folder-id": YANDEX_FOLDER_ID,
                     "Content-Type": "application/json"
                 },
-                json=payload  # Отправляем JSON, а не multipart!
+                json=payload
             )
 
         print(f"📡 Ответ сервера: {response.status_code}")
@@ -105,14 +104,17 @@ async def transcribe_audio_async(file_path: str) -> str:
         print(f"✅ Операция создана. ID: {operation_id}")
         print("⏳ Ожидаю завершения распознавания...")
 
+        # Возвращаем чанки с таймкодами
         return await poll_operation_async(operation_id)
 
     except Exception as e:
         raise Exception(f"Ошибка транскрибации: {e}")
 
 
-async def poll_operation_async(operation_id: str) -> str:
-    """Проверяет статус операции распознавания."""
+async def poll_operation_async(operation_id: str) -> dict:
+    """
+    Проверяет статус операции и возвращает чанки с таймкодами.
+    """
     url = f"https://operation.api.cloud.yandex.net/operations/{operation_id}"
 
     max_attempts = 120
@@ -143,18 +145,17 @@ async def poll_operation_async(operation_id: str) -> str:
                 response_result = result.get('response', {})
                 chunks = response_result.get('chunks', [])
 
-                if not chunks:
-                    return "Текст не распознан"
-
-                full_text = " ".join([
-                    chunk.get('alternatives', [{}])[0].get('text', '')
-                    for chunk in chunks
-                ])
-                return full_text
+                # Возвращаем чанки целиком (с таймкодами), а не просто текст
+                return {
+                    'chunks': chunks,
+                    'success': True
+                }
 
             if attempt % 6 == 0:
                 print(f"  ⏳ Проверка #{attempt}...")
 
             await asyncio.sleep(5)
+
+    raise Exception("Превышено время ожидания (10 минут)")
 
     raise Exception("Превышено время ожидания (10 минут)")

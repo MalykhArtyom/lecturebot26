@@ -9,6 +9,7 @@ from aiohttp import ClientSession
 from aiohttp_socks import ProxyConnector
 from config import BOT_TOKEN, PROXY_URL
 from transcription import transcribe_audio_async
+from summarization import create_summary_with_timestamps
 
 dp = Dispatcher()
 
@@ -52,28 +53,35 @@ async def handle_audio(message: types.Message):
             destination=unique_filename
         )
 
-        await wait_msg.edit_text("✅ Файл сохранен!\n🔄 Транскрибирую аудио в текст...")
+        await wait_msg.edit_text("✅ Файл сохранен!\n🔄 Транскрибирую аудио...")
 
-        # 2. Вызываем транскрибацию
-        transcript_text = await transcribe_audio_async(unique_filename)
+        # 2. Транскрибируем (получаем чанки с таймкодами)
+        transcription_result = await transcribe_audio_async(unique_filename)
 
-        # 3. Отправляем результат пользователю
-        if len(transcript_text) > 4000:  # Telegram ограничивает длину сообщения
-            # Если текст очень длинный, разбиваем на части
-            for i in range(0, len(transcript_text), 4000):
-                await message.answer(transcript_text[i:i + 4000])
+        if not transcription_result.get('success'):
+            raise Exception("Транскрибация не удалась")
+
+        chunks = transcription_result.get('chunks', [])
+
+        await wait_msg.edit_text("📝 Транскрибация готова!\n🧠 Создаю конспект...")
+
+        # 3. Создаем конспект с таймкодами
+        summary = await create_summary_with_timestamps(chunks)
+
+        # 4. Отправляем конспект пользователю
+        if len(summary) > 4000:
+            # Разбиваем длинный конспект на части
+            for i in range(0, len(summary), 4000):
+                await message.answer(summary[i:i + 4000], parse_mode="Markdown")
         else:
-            await message.answer(
-                f"📝 **Транскрибация:**\n\n{transcript_text}",
-                parse_mode="Markdown"
-            )
+            await message.answer(summary, parse_mode="Markdown")
 
-        # 4. Удаляем временный файл (опционально)
-        # os.remove(unique_filename)
+        # 5. Удаляем временный файл
+        os.remove(unique_filename)
+        print(f"🗑 Удален временный файл: {unique_filename}")
 
     except Exception as e:
         await wait_msg.edit_text(f"❌ Ошибка: {e}")
-
 
 
 # Также добавим поддержку голосовых сообщений (Voice), если пользователь запишет их прямо в боте
