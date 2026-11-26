@@ -1,0 +1,39 @@
+# Секреты и ключи (САМОЕ ВАЖНОЕ!)
+.env
+*.key
+*.pem
+
+# Виртуальное окружение
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# PyCharm
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Временные файлы аудио
+audio/
+*.mp3
+*.wav
+*.ogg
+
+# ОС
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Логи
+*.log
