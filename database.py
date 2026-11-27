@@ -14,25 +14,20 @@ def get_connection() -> sqlite3.Connection:
 
 
 def init_db():
-    """Создаёт таблицы, если их ещё нет."""
     conn = get_connection()
     cursor = conn.cursor()
 
-    # Таблица пользователей
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             telegram_id INTEGER UNIQUE NOT NULL,
             username TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            subscription TEXT DEFAULT 'free',
-            subscription_expires TIMESTAMP,
             lectures_count INTEGER DEFAULT 0,
-            total_tokens INTEGER DEFAULT 0
+            purchased_lectures INTEGER DEFAULT 0
         )
     """)
 
-    # Таблица лекций
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS lectures (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -89,49 +84,20 @@ def get_or_create_user(telegram_id: int, username: Optional[str] = None) -> dict
 
 
 def can_process_lecture(telegram_id: int) -> tuple[bool, str]:
-    """
-    Проверяет, может ли пользователь обработать ещё одну лекцию.
-    Возвращает (можно_ли, причина).
-    """
     user = get_user(telegram_id)
     if not user:
         return False, "Пользователь не найден"
 
-    # Если премиум — без лимитов
-    if user['subscription'] == 'premium':
-        # Проверяем, не истёк ли срок подписки
-        if user['subscription_expires']:
-            expires = datetime.fromisoformat(user['subscription_expires'])
-            if expires < datetime.now():
-                # Подписка истекла — переводим в free
-                downgrade_to_free(telegram_id)
-                return False, "Подписка истекла. Продлите для продолжения."
+    if user['lectures_count'] < 5:
         return True, ""
 
-    # Free пользователь: лимит 5 лекций в день
-    conn = get_connection()
-    cursor = conn.cursor()
+    if user['purchased_lectures'] > 0:
+        return True, ""
 
-    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-
-    cursor.execute(
-        """SELECT COUNT(*) as count FROM lectures 
-           WHERE user_id = ? AND created_at >= ?""",
-        (telegram_id, today_start.isoformat())
+    return False, (
+        "📊 Бесплатный лимит исчерпан!\n"
+        "💎 Купите пакет лекций, чтобы продолжить."
     )
-    result = cursor.fetchone()
-    today_count = result['count']
-
-    conn.close()
-
-    if today_count >= 5:
-        return False, (
-            "📊 Лимит бесплатных лекций исчерпан!\n"
-            "Сегодня ты уже обработал 5 лекций.\n\n"
-            "💎 Оформите подписку Premium для безлимитной обработки."
-        )
-
-    return True, ""
 
 
 def get_user(telegram_id: int) -> Optional[dict]:
@@ -249,3 +215,13 @@ def get_stats() -> dict:
         'premium_users': premium_users,
         'total_lectures': total_lectures
     }
+
+def spend_purchased_lecture(telegram_id: int):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE users SET purchased_lectures = purchased_lectures - 1 WHERE telegram_id = ?",
+        (telegram_id,)
+    )
+    conn.commit()
+    conn.close()
