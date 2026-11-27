@@ -10,6 +10,8 @@ from aiohttp_socks import ProxyConnector
 from config import BOT_TOKEN, PROXY_URL
 from transcription import transcribe_audio_async
 from summarization import create_summary_with_timestamps
+from database import init_db, get_or_create_user, can_process_lecture, save_lecture, increment_lecture_count
+from database import get_stats
 
 dp = Dispatcher()
 
@@ -37,6 +39,18 @@ async def cmd_help(message: types.Message):
 
 @dp.message(F.audio)
 async def handle_audio(message: types.Message):
+    # Регистрируем пользователя (если ещё не зарегистрирован)
+    user = get_or_create_user(
+        message.from_user.id,
+        message.from_user.username
+    )
+
+    # Проверяем лимит
+    can_process, reason = can_process_lecture(message.from_user.id)
+    if not can_process:
+        await message.answer(reason)
+        return
+
     wait_msg = await message.answer("⏳ Скачиваю аудиофайл...")
 
     user_id = message.from_user.id
@@ -47,38 +61,54 @@ async def handle_audio(message: types.Message):
     unique_filename = f"audio/{user_id}_{timestamp}.{file_extension}"
 
     try:
-        # 1. Скачиваем файл
-        await bot.download(
-            message.audio.file_id,
-            destination=unique_filename
-        )
+        # Скачиваем файл с проверкой
+        expected_size = message.audio.file_size
+        await bot.download(message.audio.file_id, destination=unique_filename)
+
+        actual_size = os.path.getsize(unique_filename)
+        if actual_size < expected_size * 0.95:
+            os.remove(unique_filename)
+            await bot.download(message.audio.file_id, destination=unique_filename)
 
         await wait_msg.edit_text("✅ Файл сохранен!\n🔄 Транскрибирую аудио...")
 
-        # 2. Транскрибируем (получаем чанки с таймкодами)
+        # Транскрибируем
         transcription_result = await transcribe_audio_async(unique_filename)
-
         if not transcription_result.get('success'):
             raise Exception("Транскрибация не удалась")
 
         chunks = transcription_result.get('chunks', [])
 
+        # Собираем сырой текст для сохранения в БД
+        raw_transcript = "\n".join([
+            chunk.get('alternatives', [{}])[0].get('text', '')
+            for chunk in chunks
+        ])
+
         await wait_msg.edit_text("📝 Транскрибация готова!\n🧠 Создаю конспект...")
 
-        # 3. Создаем конспект с таймкодами
+        # Создаем конспект
         summary = await create_summary_with_timestamps(chunks)
 
-        # 4. Отправляем конспект пользователю
+        # Сохраняем в БД
+        save_lecture(
+            telegram_id=user_id,
+            filename=original_name,
+            duration=message.audio.duration,
+            transcript=raw_transcript,
+            summary=summary
+        )
+        increment_lecture_count(user_id)
+
+        # Отправляем конспект
         if len(summary) > 4000:
-            # Разбиваем длинный конспект на части
             for i in range(0, len(summary), 4000):
                 await message.answer(summary[i:i + 4000], parse_mode="Markdown")
         else:
             await message.answer(summary, parse_mode="Markdown")
 
-        # 5. Удаляем временный файл
+        # Удаляем временный файл
         os.remove(unique_filename)
-        print(f"🗑 Удален временный файл: {unique_filename}")
 
     except Exception as e:
         await wait_msg.edit_text(f"❌ Ошибка: {e}")
@@ -93,8 +123,21 @@ async def handle_voice(message: types.Message):
         "Попробуй отправить файл таким способом!"
     )
 
+@dp.message(Command("stats"))
+async def cmd_stats(message: types.Message):
+    """Показывает статистику бота (для владельца)."""
+    stats = get_stats()
+    await message.answer(
+        f"📊 **Статистика бота:**\n\n"
+        f"👥 Всего пользователей: {stats['total_users']}\n"
+        f"💎 Premium: {stats['premium_users']}\n"
+        f"📚 Обработано лекций: {stats['total_lectures']}",
+        parse_mode="Markdown"
+    )
+
 
 async def main():
+    init_db()
     if PROXY_URL and PROXY_URL.startswith("socks5"):
         connector = ProxyConnector.from_url(PROXY_URL)
         session = AiohttpSession(session=ClientSession(connector=connector))

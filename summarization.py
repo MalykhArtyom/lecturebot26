@@ -31,6 +31,7 @@ async def create_summary_with_timestamps(chunks: list) -> str:
         # Получаем время в наносекундах и конвертируем в миллисекунды
         start_ns = chunk.get('startTime', '0')
         end_ns = chunk.get('endTime', '0')
+        print(f"🔍 Сырое время: start={start_ns}, end={end_ns}")  # <-- ДИАГНОСТИКА
 
         # Yandex возвращает время в формате "1234567890s" (секунды с точностью)
         start_ms = parse_timestamp(start_ns)
@@ -41,6 +42,7 @@ async def create_summary_with_timestamps(chunks: list) -> str:
             'start': start_ms,
             'end': end_ms
         })
+
 
     if not segments:
         return "❌ Не удалось распознать текст"
@@ -66,7 +68,6 @@ async def create_summary_with_timestamps(chunks: list) -> str:
 
 СТРУКТУРА КОНСПЕКТА:
 📚 ЛЕКЦИЯ: [краткое название темы]
-⏱ Длительность: [общее время]
 
 📖 [MM:SS] - [MM:SS] | [Название раздела 1]
 [Краткое содержание раздела с основными тезисами]
